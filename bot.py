@@ -1,109 +1,63 @@
 import os
 import asyncio
-from aiogram import Bot, Dispatcher, types, F
+import logging
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import yt_dlp
 
-BOT_TOKEN = "8994223471:AAEMX4XbjPkTKs7BIMUdbeBxWEuGBO3MgWk"
+TOKEN = "8994223471:AAEMX4XbjPkTKs7BIMUdbeBxWEuGBO3MgWk"
 
-bot = Bot(token=BOT_TOKEN)
+logging.basicConfig(level=logging.INFO)
+
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
-
-user_links = {}
 
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message):
-    await message.answer(
-        "👋 Assalomu alaykum!\n\n"
-        "Men **Saved Master Bot**man. YouTube va Instagram'dan video hamda musiqalarni yuklab beraman.\n\n"
-        "Menga shunchaki media havolasini (linkini) yuboring!"
-    )
+    await message.answer("Xush kelibsiz! Menga YouTube yoki Instagram havolasini yuboring, men videoni yuklab beraman.")
 
-@dp.message(F.text.startswith("http://") | F.text.startswith("https://"))
-async def handle_link(message: types.Message):
+@dp.message(F.text.startswith("http"))
+async def download_video(message: types.Message):
     url = message.text.strip()
-    user_id = message.from_user.id
-    user_links[user_id] = url
-
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🎵 Musiqasi (MP3)", callback_data="dl_audio"),
-                InlineKeyboardButton(text="🎬 Videosini yuklash", callback_data="dl_video"),
-            ]
-        ]
-    )
-
-    await message.answer("Tanlang: Musiqasini yuklaysizmi yoki videosinimi?", reply_markup=keyboard)
-
-@dp.callback_query(F.data.in_({"dl_video", "dl_audio"}))
-async def process_download(call: CallbackQuery):
-    user_id = call.from_user.id
-    url = user_links.get(user_id)
-
-    if not url:
-        await call.message.edit_text("❌ Link topilmadi. Qaytadan link yuboring.")
-        return
-
-    is_audio = call.data == "dl_audio"
-    status_msg = await call.message.edit_text("⏳ Yuklab olinmoqda, biroz kuting...")
-
-    os.makedirs("downloads", exist_ok=True)
-
+    status_msg = await message.answer("⏳ Video yuklanmoqda, kuting...")
+    
+    file_path = f"video_{message.from_user.id}.mp4"
+    
     ydl_opts = {
-        'outtmpl': f'downloads/{user_id}_%(id)s.%(ext)s',
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': file_path,
         'quiet': True,
         'no_warnings': True,
+        'nocheckcertificate': True,
+        'source_address': '0.0.0.0',
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'http_headers': {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        }
     }
 
-    if is_audio:
-        ydl_opts.update({
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-        })
-    else:
-        ydl_opts.update({
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        })
+    def fetch():
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
 
     try:
-        loop = asyncio.get_event_loop()
-        file_path = await loop.run_in_executor(None, download_media, url, ydl_opts, is_audio)
-
-        await status_msg.edit_text("🚀 Telegram'ga yuklanmoqda...")
-
-        if is_audio:
-            audio_file = types.FSInputFile(file_path)
-            await call.message.answer_audio(audio=audio_file, caption="✅ Musiqasi yuklab olindi! | @SavedMasterBot")
-        else:
+        await asyncio.to_thread(fetch)
+        
+        if os.path.exists(file_path):
             video_file = types.FSInputFile(file_path)
-            await call.message.answer_video(video=video_file, caption="✅ Video yuklab olindi! | @SavedMasterBot")
-
-        await status_msg.delete()
-
+            await message.answer_video(video=video_file, caption="✅ Video yuklab olindi!")
+            os.remove(file_path)
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text("❌ Videoni saqlab bo'lmadi.")
+    except Exception as e:
+        logging.error(f"Error downloading video: {e}")
+        await status_msg.edit_text("❌ Yuklab olishda xatolik yuz berdi. Linkni tekshirib qaytadan yuboring.")
         if os.path.exists(file_path):
             os.remove(file_path)
 
-    except Exception as e:
-        await status_msg.edit_text("❌ Yuklab olishda xatolik yuz berdi. Linkni tekshirib qaytadan yuboring.")
-        print(f"Xatolik: {e}")
-
-def download_media(url, opts, is_audio):
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
-        if is_audio:
-            base, _ = os.path.splitext(filename)
-            return f"{base}.mp3"
-        return filename
-
 async def main():
-    print("Bot muvaffaqiyatli ishga tushdi...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
